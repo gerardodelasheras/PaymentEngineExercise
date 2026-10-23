@@ -1,0 +1,121 @@
+type      ,client,    tx,    amount
+deposit   ,     1,     1, 4373.73
+deposit   ,     2,     2, 1362.42
+deposit   ,     2,     3, 2952.315
+deposit   ,     3,     4, 3212.3357
+deposit   ,     4,     5, 2994
+deposit   ,     5,     6, 3271.517
+dispute   ,     1,     1,
+resolve   ,     1,     1,
+dispute   ,     2,     2,
+chargeback,     2,     2,
+deposit   ,     2,     7, 2856.413
+dispute   ,     3,     1,
+withdrawal,     3,     8,99999.9999
+dispute   ,     4,999999,
+bogus     ,     4,     9,   10.0
+deposit   ,     5,    10,   -5.0
+withdrawal,     3,    11, 2898.58
+chargeback,     2,    12,
+withdrawal,     3,    13, 4957.4
+withdrawal,     2,    14, 4309.9458
+deposit   ,     1,    15,  445.81
+deposit   ,     2,    16, 2339.9
+deposit   ,     3,    17, 2737.3
+deposit   ,     5,    18, 4554.39
+withdrawal,     2,    19, 1486.67
+dispute   ,     3,    17,
+withdrawal,     5,    20,  206.499
+dispute   ,     3,    11,
+dispute   ,     1,     1,
+withdrawal,     1,    21,  487.323
+deposit   ,     1,    22, 4432.898
+withdrawal,     1,    23, 3503.0
+deposit   ,     4,    24, 1279
+deposit   ,     4,    25,  565.9
+withdrawal,     3,    26, 1573
+withdrawal,     4,    27, 4533.3
+deposit   ,     3,    28, 1598.980
+chargeback,     5,    29,
+withdrawal,     4,    30, 2640
+withdrawal,     5,    31, 3588.8
+dispute   ,     5,     6,
+resolve   ,     5,     6,
+withdrawal,     2,    32, 2262.30
+dispute   ,     3,    28,
+deposit   ,     1,    33, 2259.9
+bogus     ,     4,    34,   10.0
+withdrawal,     5,    35, 1606.14
+deposit   ,     2,    36, 4032.27
+withdrawal,     3,    37, 2272.13
+withdrawal,     2,    38, 4846.05
+withdrawal,     5,    39,  134
+deposit   ,     4,    40,   -5.0
+withdrawal,     5,    41, 3753.02
+dispute   ,     1,    23,
+withdrawal,     1,    42, 3614.6
+dispute   ,     1,    22,
+dispute   ,     4,     5,
+withdrawal,     1,    43, 2456.24
+withdrawal,     2,    44,  877
+withdrawal,     5,    45, 3320.31
+withdrawal,     1,    46, 3410.8
+withdrawal,     4,    47, 1595
+resolve   ,     1,     1,
+withdrawal,     3,    48,  231
+deposit   ,     2,    49, 4512.865
+chargeback,     3,    28,
+withdrawal,     2,    50,   62.424
+withdrawal,     3,    51,  321.41
+dispute   ,     5,    39,
+resolve   ,     1,    22,
+withdrawal,     5,    52, 3881.7
+deposit   ,     2,    53, 3487.8
+dispute   ,     5,    18,
+resolve   ,     5,    54,
+deposit   ,     5,    55,  171.8
+dispute   ,     5,    35,
+deposit   ,     3,    56, 4023.5
+dispute   ,     4,    25,
+deposit   ,     2,    57, 4416
+deposit   ,     1,    58, 4335.0
+deposit   ,     4,    59,  339.55
+deposit   ,     4,    60, 2637.78
+withdrawal,     4,    61, 1751
+withdrawal,     5,    62, 2980.04
+deposit   ,     2,    63, 1873.418
+deposit   ,     2,    64, 2178.5
+deposit   ,     1,    65, 1773.9
+deposit   ,     4,    66, 4436.690
+withdrawal,     3,    67, 1244.97
+resolve   ,     1,    23,
+deposit   ,     2,    68,   23
+deposit   ,     3,    69, 1637.93
+withdrawal,     5,    70, 4306.48
+deposit   ,     4,    71, 1520.46
+chargeback,     5,    35,
+dispute   ,     1,     1,
+deposit   ,     5,    72, 2660.937
+deposit   ,     1,    73, 2631.1
+dispute   ,     1,    33,
+resolve   ,     3,    17,
+withdrawal,     2,    74, 4090.72
+deposit   ,     3,    75, 3082.0344
+deposit   ,     4,    76, 1558.548
+dispute   ,     4,    71,
+withdrawal,     4,    77, 3345.91
+deposit   ,     5,    78, 3106.22
+deposit   ,     1,    79, 1063.9
+withdrawal,     3,    80, 2056
+deposit   ,     5,    81, 2855.16
+deposit   ,     5,    82, 1256.89
+withdrawal,     3,    83, 4519
+deposit   ,     3,    84, 3184.58
+deposit   ,     1,    85, 4680.2
+withdrawal,     2,    86,  228.07
+deposit   ,     5,    87,   -5.0
+withdrawal,     5,    88, 4693.40
+withdrawal,     2,    89, 2817.9
+chargeback,     3,    90,
+deposit   ,     5,    91, 2777.04
+withdrawal,     5,    92, 3245.447

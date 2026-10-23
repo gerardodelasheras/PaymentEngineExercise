@@ -1,0 +1,101 @@
+type      ,client,    tx,    amount
+deposit   ,    11,  1001,  120.75
+withdrawal,    11,  1002,   45.25
+deposit   ,    11,  1003,  240.50
+withdrawal,    11,  1004,   90.50
+deposit   ,    11,  1005,  360.25
+withdrawal,    11,  1006,  135.75
+deposit   ,    11,  1007,  480.00
+withdrawal,    11,  1008,  180.00
+dispute   ,    11,  1001,
+resolve   ,    11,  1001,
+dispute   ,    11,  1003,
+resolve   ,    11,  1003,
+dispute   ,    11,  1005,
+resolve   ,    11,  1005,
+dispute   ,    11,  1007,
+resolve   ,    11,  1007,
+deposit   ,    11,  1009,   50.00
+dispute   ,    11,  1009,
+chargeback,    11,  1009,
+deposit   ,    11,  1010,   25.00
+deposit   ,    23,  2001,  120.75
+withdrawal,    23,  2002,   45.25
+deposit   ,    23,  2003,  240.50
+withdrawal,    23,  2004,   90.50
+deposit   ,    23,  2005,  360.25
+withdrawal,    23,  2006,  135.75
+deposit   ,    23,  2007,  480.00
+withdrawal,    23,  2008,  180.00
+dispute   ,    23,  2001,
+resolve   ,    23,  2001,
+dispute   ,    23,  2003,
+resolve   ,    23,  2003,
+dispute   ,    23,  2005,
+resolve   ,    23,  2005,
+dispute   ,    23,  2007,
+resolve   ,    23,  2007,
+deposit   ,    23,  2009,   50.00
+dispute   ,    23,  2009,
+chargeback,    23,  2009,
+deposit   ,    23,  2010,   25.00
+deposit   ,    37,  3001,  120.75
+withdrawal,    37,  3002,   45.25
+deposit   ,    37,  3003,  240.50
+withdrawal,    37,  3004,   90.50
+deposit   ,    37,  3005,  360.25
+withdrawal,    37,  3006,  135.75
+deposit   ,    37,  3007,  480.00
+withdrawal,    37,  3008,  180.00
+dispute   ,    37,  3001,
+resolve   ,    37,  3001,
+dispute   ,    37,  3003,
+resolve   ,    37,  3003,
+dispute   ,    37,  3005,
+resolve   ,    37,  3005,
+dispute   ,    37,  3007,
+resolve   ,    37,  3007,
+deposit   ,    37,  3009,   50.00
+dispute   ,    37,  3009,
+chargeback,    37,  3009,
+deposit   ,    37,  3010,   25.00
+deposit   ,    42,  4001,  120.75
+withdrawal,    42,  4002,   45.25
+deposit   ,    42,  4003,  240.50
+withdrawal,    42,  4004,   90.50
+deposit   ,    42,  4005,  360.25
+withdrawal,    42,  4006,  135.75
+deposit   ,    42,  4007,  480.00
+withdrawal,    42,  4008,  180.00
+dispute   ,    42,  4001,
+resolve   ,    42,  4001,
+dispute   ,    42,  4003,
+resolve   ,    42,  4003,
+dispute   ,    42,  4005,
+resolve   ,    42,  4005,
+dispute   ,    42,  4007,
+resolve   ,    42,  4007,
+deposit   ,    42,  4009,   50.00
+dispute   ,    42,  4009,
+chargeback,    42,  4009,
+deposit   ,    42,  4010,   25.00
+deposit   ,    58,  5001,  120.75
+withdrawal,    58,  5002,   45.25
+deposit   ,    58,  5003,  240.50
+withdrawal,    58,  5004,   90.50
+deposit   ,    58,  5005,  360.25
+withdrawal,    58,  5006,  135.75
+deposit   ,    58,  5007,  480.00
+withdrawal,    58,  5008,  180.00
+dispute   ,    58,  5001,
+resolve   ,    58,  5001,
+dispute   ,    58,  5003,
+resolve   ,    58,  5003,
+dispute   ,    58,  5005,
+resolve   ,    58,  5005,
+dispute   ,    58,  5007,
+resolve   ,    58,  5007,
+deposit   ,    58,  5009,   50.00
+dispute   ,    58,  5009,
+chargeback,    58,  5009,
+deposit   ,    58,  5010,   25.00
