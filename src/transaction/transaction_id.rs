@@ -1,4 +1,2 @@
-//! Transaction identifiers.
-
-/// A globally unique transaction identifier.
+/// A transaction identifier.
 pub type TransactionId = u32;

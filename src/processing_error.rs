@@ -1,43 +1,83 @@
-//! Recoverable errors for transaction processing.
+use std::path::PathBuf;
 
-use std::io;
+use thiserror::Error;
 
-/// Failures transaction processing can deliberately produce. Row-level variants are
-/// non-fatal: the pipeline skips the offending row and continues.
-/// Infrastructure variants such as [`ProcessingError::WorkerUnavailable`] fail the
-/// run instead of silently omitting rows.
-#[derive(Debug, thiserror::Error)]
+/// Unified error type for row-level validation, ledger rules, and infrastructure.
+#[derive(Debug, Error)]
 pub enum ProcessingError {
-    #[error("unknown transaction type")]
-    InvalidType,
-    #[error("invalid client id")]
-    InvalidClient,
-    #[error("invalid transaction id")]
-    InvalidTx,
-    #[error("invalid amount")]
-    InvalidAmount,
-    #[error("negative amount is not allowed")]
-    NegativeAmount,
-    #[error("amount has too many decimal places")]
-    TooManyDecimals,
-    #[error("amount is missing for a monetary transaction")]
+    #[error("unknown transaction type: {0}")]
+    InvalidType(String),
+
+    #[error("invalid amount: {0}")]
+    InvalidAmount(String),
+
+    #[error("negative amount: {0}")]
+    NegativeAmount(String),
+
+    #[error("too many decimal places: {0}")]
+    TooManyDecimals(String),
+
+    #[error("missing amount")]
     MissingAmount,
-    #[error("unexpected amount on a non-monetary transaction")]
+
+    #[error("unexpected amount")]
     UnexpectedAmount,
-    #[error("account is locked")]
-    AccountLocked,
+
     #[error("insufficient funds")]
     InsufficientFunds,
-    #[error("referenced transaction does not exist")]
-    UnknownTx,
-    #[error("referenced transaction belongs to another client")]
-    NotOwner,
-    #[error("arithmetic overflow or underflow")]
+
+    #[error("account is locked")]
+    AccountLocked,
+
+    #[error("unknown transaction: {0}")]
+    UnknownTransaction(u32),
+
+    #[error("transaction already disputed: {0}")]
+    AlreadyDisputed(u32),
+
+    #[error("transaction is not under dispute: {0}")]
+    NotDisputed(u32),
+
+    #[error("transaction is not owned by this client: {0}")]
+    NotOwner(u32),
+
+    #[error("duplicate transaction identifier: {0}")]
+    DuplicateTransaction(u32),
+
+    #[error("invalid CSV header: {0}")]
+    InvalidHeader(String),
+
+    #[error("amount overflow")]
     Overflow,
-    #[error("worker or producer channel closed before all rows were processed")]
-    WorkerUnavailable,
-    #[error("i/o error: {0}")]
-    Io(#[from] io::Error),
+
+    #[error("amount underflow")]
+    Underflow,
+
+    #[error("worker unavailable: {0}")]
+    WorkerUnavailable(String),
+
     #[error("csv error: {0}")]
     Csv(#[from] csv::Error),
+
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("cannot open {}: {source}", path.display())]
+    FileOpen {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
+
+impl ProcessingError {
+    /// Whether a row-level failure may be skipped while the stream continues.
+    pub fn is_recoverable(&self) -> bool {
+        match self {
+            ProcessingError::Io(_)
+            | ProcessingError::FileOpen { .. }
+            | ProcessingError::WorkerUnavailable(_) => false,
+            ProcessingError::Csv(error) => !matches!(error.kind(), csv::ErrorKind::Io(_)),
+            _ => true,
+        }
+    }
 }

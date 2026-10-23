@@ -1,77 +1,60 @@
-//! Client-to-worker routing policy.
-
 use std::collections::HashMap;
 
-use super::id::ClientId;
+use crate::client::client_id::ClientId;
 
-/// Tracks the worker assigned to each client and balances new clients.
+/// Assigns each client to a worker and pins it there.
 #[derive(Debug)]
-pub(crate) struct ClientDispatcher {
-    assignments: HashMap<ClientId, usize>,
-    assigned_counts: Vec<usize>,
+pub struct ClientDispatcher {
+    worker_of: HashMap<ClientId, usize>,
+    assigned: Vec<usize>,
     cursor: usize,
 }
 
 impl ClientDispatcher {
-    /// Create a dispatcher for a fixed number of workers.
-    pub(crate) fn new(worker_count: usize) -> Self {
-        debug_assert!(worker_count > 0);
+    pub fn new(workers: usize) -> Self {
+        assert!(workers > 0, "at least one worker is required");
         Self {
-            assignments: HashMap::new(),
-            assigned_counts: vec![0; worker_count],
+            worker_of: HashMap::new(),
+            assigned: vec![0; workers],
             cursor: 0,
         }
     }
 
-    /// Return the worker already assigned to `client`, if any.
-    pub(crate) fn assigned_worker(&self, client: ClientId) -> Option<usize> {
-        self.assignments.get(&client).copied()
-    }
-
-    /// Assign `client` to the least-loaded worker and return that worker.
-    ///
-    /// Existing assignments are returned unchanged.
-    pub(crate) fn assign(&mut self, client: ClientId, capacities: &[usize]) -> usize {
-        if let Some(&worker) = self.assignments.get(&client) {
+    /// Returns the worker for `client`, assigning a least-loaded worker on first
+    /// sight. `capacities` is the remaining queue capacity of each worker.
+    pub fn worker_for(&mut self, client: ClientId, capacities: &[usize]) -> usize {
+        if let Some(&worker) = self.worker_of.get(&client) {
             return worker;
         }
 
-        let worker = choose_worker(capacities, &self.assigned_counts, self.cursor);
-        self.assignments.insert(client, worker);
-        self.assigned_counts[worker] += 1;
-        self.cursor = (worker + 1) % capacities.len();
-        worker
-    }
-}
-
-/// Choose the worker with the fewest assigned clients, then the largest
-/// remaining capacity, then the first worker in round-robin order.
-pub(crate) fn choose_worker(
-    capacities: &[usize],
-    assigned_counts: &[usize],
-    cursor: usize,
-) -> usize {
-    debug_assert!(!capacities.is_empty());
-    debug_assert_eq!(capacities.len(), assigned_counts.len());
-
-    let worker_count = capacities.len();
-    let mut best = cursor % worker_count;
-    let mut best_count = assigned_counts[best];
-    let mut best_capacity = capacities[best];
-
-    for offset in 1..worker_count {
-        let index = (cursor + offset) % worker_count;
-        let count = assigned_counts[index];
-        let capacity = capacities[index];
-
-        if count < best_count || (count == best_count && capacity > best_capacity) {
-            best = index;
-            best_count = count;
-            best_capacity = capacity;
+        let workers = self.assigned.len();
+        debug_assert_eq!(capacities.len(), workers);
+        let start = self.cursor % workers;
+        let mut best = start;
+        for offset in 1..workers {
+            let worker = (start + offset) % workers;
+            let more_capacity = capacities[worker] > capacities[best];
+            let fewer_clients = self.assigned[worker] < self.assigned[best];
+            let same_load_more_capacity =
+                self.assigned[worker] == self.assigned[best] && more_capacity;
+            if fewer_clients || same_load_more_capacity {
+                best = worker;
+            }
         }
+
+        self.assigned[best] += 1;
+        self.worker_of.insert(client, best);
+        self.cursor = (best + 1) % workers;
+        best
     }
 
-    best
+    pub fn assigned(&self) -> &[usize] {
+        &self.assigned
+    }
+
+    pub fn worker_of(&self, client: ClientId) -> Option<usize> {
+        self.worker_of.get(&client).copied()
+    }
 }
 
 #[cfg(test)]
@@ -79,39 +62,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn assigned_count_wins_over_capacity() {
-        assert_eq!(choose_worker(&[256, 0, 256], &[2, 0, 1], 0), 1);
+    fn pins_a_client_to_its_first_worker() {
+        let mut dispatcher = ClientDispatcher::new(2);
+        let first = dispatcher.worker_for(7, &[10, 10]);
+        let again = dispatcher.worker_for(7, &[0, 0]);
+        assert_eq!(first, again);
     }
 
     #[test]
-    fn capacity_breaks_assigned_count_ties() {
-        assert_eq!(choose_worker(&[0, 5, 5], &[1, 1, 2], 0), 1);
-        assert_eq!(choose_worker(&[5, 0, 5], &[1, 1, 1], 0), 0);
+    fn spreads_new_clients_across_workers() {
+        let mut dispatcher = ClientDispatcher::new(2);
+        let a = dispatcher.worker_for(1, &[10, 10]);
+        let b = dispatcher.worker_for(2, &[10, 10]);
+        assert_ne!(a, b);
+        assert_eq!(dispatcher.assigned(), &[1, 1]);
     }
 
     #[test]
-    fn cursor_breaks_remaining_ties() {
-        assert_eq!(choose_worker(&[5, 5, 5], &[1, 1, 1], 1), 1);
-        assert_eq!(choose_worker(&[5, 5, 5], &[1, 1, 1], 2), 2);
+    fn prefers_the_worker_with_fewer_clients() {
+        let mut dispatcher = ClientDispatcher::new(2);
+        dispatcher.worker_for(1, &[10, 10]);
+        // Worker 0 now has one client; worker 1 has none.
+        let next = dispatcher.worker_for(2, &[10, 10]);
+        assert_eq!(next, 1);
     }
 
     #[test]
-    fn new_clients_spread_across_equal_workers() {
+    fn breaks_load_ties_by_remaining_capacity() {
+        let mut dispatcher = ClientDispatcher::new(2);
+        let next = dispatcher.worker_for(1, &[0, 5]);
+        assert_eq!(next, 1);
+    }
+
+    #[test]
+    fn breaks_full_ties_in_round_robin_order() {
         let mut dispatcher = ClientDispatcher::new(3);
-
-        let workers: Vec<_> = (0..3)
-            .map(|client| dispatcher.assign(client, &[256, 256, 256]))
+        let order: Vec<usize> = (1..=3)
+            .map(|client| dispatcher.worker_for(client, &[10, 10, 10]))
             .collect();
-
-        assert_eq!(workers, vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn existing_client_stays_pinned() {
-        let mut dispatcher = ClientDispatcher::new(3);
-
-        let worker = dispatcher.assign(7, &[256, 256, 256]);
-        assert_eq!(dispatcher.assigned_worker(7), Some(worker));
-        assert_eq!(dispatcher.assign(7, &[0, 0, 0]), worker);
+        assert_eq!(order, vec![0, 1, 2]);
+        let next = dispatcher.worker_for(4, &[10, 10, 10]);
+        assert_eq!(next, 0);
     }
 }

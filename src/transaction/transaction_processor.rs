@@ -1,20 +1,18 @@
-//! The transaction processor for one worker: applies transactions and mutates
-//! the accounts and transaction index it owns.
-
 use std::collections::HashMap;
 
-use super::transaction_entry::TransactionEntry;
-use crate::account::Account;
+use crate::account::account::Account;
 use crate::amount::Amount;
-use crate::client::ClientId;
+use crate::client::client_id::ClientId;
 use crate::processing_error::ProcessingError;
-use crate::transaction::{Transaction, TransactionId, TransactionType};
+use crate::transaction::transaction::Transaction;
+use crate::transaction::transaction_entry::TransactionEntry;
+use crate::transaction::transaction_id::TransactionId;
+use crate::transaction::transaction_type::TransactionType;
 
-/// Applies transactions against the accounts and transaction index owned by a
-/// single worker.
+/// Per-worker account and transaction state machine.
 #[derive(Debug, Default)]
 pub struct TransactionProcessor {
-    pub accounts: HashMap<ClientId, Account>,
+    accounts: HashMap<ClientId, Account>,
     entries: HashMap<TransactionId, TransactionEntry>,
 }
 
@@ -23,12 +21,16 @@ impl TransactionProcessor {
         Self::default()
     }
 
-    /// Apply one transaction, mutating account and transaction state in place.
-    /// Returns `Err` (without mutating balances or the transaction index) when
-    /// the row must be skipped. A skipped operation on a previously-unknown
-    /// client still initializes a zeroed account.
     pub fn process(&mut self, transaction: &Transaction) -> Result<(), ProcessingError> {
-        if self.accounts.entry(transaction.client).or_default().locked {
+        // A parsed row initializes its client before domain validation.
+        self.accounts.entry(transaction.client).or_default();
+
+        if self
+            .accounts
+            .get(&transaction.client)
+            .map(|account| account.locked)
+            .unwrap_or(false)
+        {
             return Err(ProcessingError::AccountLocked);
         }
 
@@ -43,16 +45,26 @@ impl TransactionProcessor {
 
     fn process_deposit(&mut self, transaction: &Transaction) -> Result<(), ProcessingError> {
         let amount = transaction.amount.ok_or(ProcessingError::MissingAmount)?;
-        let account = self.accounts.entry(transaction.client).or_default();
-        account.credit(amount)?;
+        if self.entries.contains_key(&transaction.transaction_id) {
+            return Err(ProcessingError::DuplicateTransaction(
+                transaction.transaction_id,
+            ));
+        }
+
+        self.account_mut(transaction.client).credit(amount)?;
         self.record_settled(transaction, amount);
         Ok(())
     }
 
     fn process_withdrawal(&mut self, transaction: &Transaction) -> Result<(), ProcessingError> {
         let amount = transaction.amount.ok_or(ProcessingError::MissingAmount)?;
-        let account = self.accounts.entry(transaction.client).or_default();
-        account.debit(amount)?;
+        if self.entries.contains_key(&transaction.transaction_id) {
+            return Err(ProcessingError::DuplicateTransaction(
+                transaction.transaction_id,
+            ));
+        }
+
+        self.account_mut(transaction.client).debit(amount)?;
         self.record_settled(transaction, amount);
         Ok(())
     }
@@ -67,53 +79,85 @@ impl TransactionProcessor {
         );
     }
 
-    fn process_dispute(&mut self, transaction: &Transaction) -> Result<(), ProcessingError> {
-        let (client, amount) = match self.entries.get(&transaction.transaction_id) {
-            Some(TransactionEntry::Settled { client, amount }) => (*client, *amount),
-            _ => return Err(ProcessingError::UnknownTx),
+    fn account_mut(&mut self, client: ClientId) -> &mut Account {
+        self.accounts.entry(client).or_default()
+    }
+
+    fn lookup(&self, transaction: &Transaction) -> Result<TransactionEntry, ProcessingError> {
+        let entry = self.entries.get(&transaction.transaction_id).ok_or(
+            ProcessingError::UnknownTransaction(transaction.transaction_id),
+        )?;
+        let owner = match entry {
+            TransactionEntry::Settled { client, .. }
+            | TransactionEntry::Disputed { client, .. } => *client,
         };
-        if client != transaction.client {
-            return Err(ProcessingError::NotOwner);
+        if owner != transaction.client {
+            return Err(ProcessingError::NotOwner(transaction.transaction_id));
         }
-        let account = self.accounts.entry(transaction.client).or_default();
-        account.hold(amount)?;
+        Ok(*entry)
+    }
+
+    fn process_dispute(&mut self, transaction: &Transaction) -> Result<(), ProcessingError> {
+        let amount = match self.lookup(transaction)? {
+            TransactionEntry::Settled { amount, .. } => amount,
+            TransactionEntry::Disputed { .. } => {
+                return Err(ProcessingError::AlreadyDisputed(transaction.transaction_id));
+            }
+        };
+
+        self.account_mut(transaction.client).hold(amount)?;
         self.entries.insert(
             transaction.transaction_id,
-            TransactionEntry::Disputed { client, amount },
+            TransactionEntry::Disputed {
+                client: transaction.client,
+                amount,
+            },
         );
         Ok(())
     }
 
     fn process_resolve(&mut self, transaction: &Transaction) -> Result<(), ProcessingError> {
-        let (client, amount) = match self.entries.get(&transaction.transaction_id) {
-            Some(TransactionEntry::Disputed { client, amount }) => (*client, *amount),
-            _ => return Err(ProcessingError::UnknownTx),
+        let amount = match self.lookup(transaction)? {
+            TransactionEntry::Disputed { amount, .. } => amount,
+            TransactionEntry::Settled { .. } => {
+                return Err(ProcessingError::NotDisputed(transaction.transaction_id));
+            }
         };
-        if client != transaction.client {
-            return Err(ProcessingError::NotOwner);
-        }
-        let account = self.accounts.entry(transaction.client).or_default();
-        account.release(amount)?;
+
+        self.account_mut(transaction.client).release(amount)?;
         self.entries.insert(
             transaction.transaction_id,
-            TransactionEntry::Settled { client, amount },
+            TransactionEntry::Settled {
+                client: transaction.client,
+                amount,
+            },
         );
         Ok(())
     }
 
     fn process_chargeback(&mut self, transaction: &Transaction) -> Result<(), ProcessingError> {
-        let (client, amount) = match self.entries.get(&transaction.transaction_id) {
-            Some(TransactionEntry::Disputed { client, amount }) => (*client, *amount),
-            _ => return Err(ProcessingError::UnknownTx),
+        let amount = match self.lookup(transaction)? {
+            TransactionEntry::Disputed { amount, .. } => amount,
+            TransactionEntry::Settled { .. } => {
+                return Err(ProcessingError::NotDisputed(transaction.transaction_id));
+            }
         };
-        if client != transaction.client {
-            return Err(ProcessingError::NotOwner);
-        }
-        let account = self.accounts.entry(transaction.client).or_default();
-        account.chargeback(amount)?;
-        // Terminal: the charged-back record is removed, never re-stored.
+
+        self.account_mut(transaction.client).chargeback(amount)?;
         self.entries.remove(&transaction.transaction_id);
         Ok(())
+    }
+
+    pub(crate) fn take_accounts(&mut self) -> HashMap<ClientId, Account> {
+        std::mem::take(&mut self.accounts)
+    }
+
+    pub fn accounts(&self) -> &HashMap<ClientId, Account> {
+        &self.accounts
+    }
+
+    pub fn snapshot(&self) -> HashMap<ClientId, Account> {
+        self.accounts.clone()
     }
 }
 
@@ -121,226 +165,314 @@ impl TransactionProcessor {
 mod tests {
     use super::*;
     use crate::amount::Amount;
-    use crate::client::ClientId;
-    use crate::transaction::{Transaction, TransactionId, TransactionType};
 
-    fn deposit(client: ClientId, transaction_id: TransactionId, amount: &str) -> Transaction {
+    fn amount(value: &str) -> Option<Amount> {
+        Some(Amount::parse(value).expect("valid amount"))
+    }
+
+    fn transaction(
+        transaction_type: TransactionType,
+        client: ClientId,
+        id: TransactionId,
+        value: Option<&str>,
+    ) -> Transaction {
         Transaction {
-            transaction_type: TransactionType::Deposit,
+            transaction_type,
             client,
-            transaction_id,
-            amount: Some(Amount::parse(amount).unwrap()),
+            transaction_id: id,
+            amount: value.map(|text| Amount::parse(text).expect("valid amount")),
         }
     }
 
-    fn withdrawal(client: ClientId, transaction_id: TransactionId, amount: &str) -> Transaction {
-        Transaction {
-            transaction_type: TransactionType::Withdrawal,
-            client,
-            transaction_id,
-            amount: Some(Amount::parse(amount).unwrap()),
-        }
+    fn deposit(
+        processor: &mut TransactionProcessor,
+        client: ClientId,
+        id: TransactionId,
+        value: &str,
+    ) {
+        processor
+            .process(&transaction(
+                TransactionType::Deposit,
+                client,
+                id,
+                Some(value),
+            ))
+            .expect("deposit succeeds");
     }
 
-    fn dispute(client: ClientId, transaction_id: TransactionId) -> Transaction {
-        Transaction {
-            transaction_type: TransactionType::Dispute,
-            client,
-            transaction_id,
-            amount: None,
-        }
-    }
-
-    fn resolve(client: ClientId, transaction_id: TransactionId) -> Transaction {
-        Transaction {
-            transaction_type: TransactionType::Resolve,
-            client,
-            transaction_id,
-            amount: None,
-        }
-    }
-
-    fn chargeback(client: ClientId, transaction_id: TransactionId) -> Transaction {
-        Transaction {
-            transaction_type: TransactionType::Chargeback,
-            client,
-            transaction_id,
-            amount: None,
-        }
+    fn account(processor: &TransactionProcessor, client: ClientId) -> Account {
+        processor
+            .accounts()
+            .get(&client)
+            .cloned()
+            .expect("account exists")
     }
 
     #[test]
-    fn entries_deposits_and_withdrawals_in_index() {
+    fn deposit_credits_available() {
         let mut processor = TransactionProcessor::new();
-        processor.process(&deposit(1, 1, "100.25")).unwrap();
-        processor.process(&withdrawal(1, 2, "25.00")).unwrap();
+        deposit(&mut processor, 1, 1, "10.0");
+        assert_eq!(account(&processor, 1).available, amount("10.0").unwrap());
+        assert_eq!(account(&processor, 1).total(), amount("10.0").unwrap());
+    }
+
+    #[test]
+    fn withdrawal_debits_available() {
+        let mut processor = TransactionProcessor::new();
+        deposit(&mut processor, 1, 1, "10.0");
+        processor
+            .process(&transaction(TransactionType::Withdrawal, 1, 2, Some("4.0")))
+            .expect("withdrawal succeeds");
+        assert_eq!(account(&processor, 1).available, amount("6.0").unwrap());
+    }
+
+    #[test]
+    fn insufficient_withdrawal_leaves_balances_unchanged() {
+        let mut processor = TransactionProcessor::new();
+        deposit(&mut processor, 1, 1, "3.0");
         assert!(matches!(
-            processor.entries.get(&1),
-            Some(TransactionEntry::Settled { .. })
+            processor.process(&transaction(TransactionType::Withdrawal, 1, 2, Some("5.0"))),
+            Err(ProcessingError::InsufficientFunds)
         ));
-        assert!(matches!(
-            processor.entries.get(&2),
-            Some(TransactionEntry::Settled { .. })
-        ));
-        assert_eq!(processor.entries[&1].client(), 1);
-        assert_eq!(processor.entries[&1].amount(), Amount(1_002_500));
-        assert_eq!(processor.entries[&2].client(), 1);
+        assert_eq!(account(&processor, 1).available, amount("3.0").unwrap());
     }
 
     #[test]
-    fn deposit_credits_available_and_total() {
+    fn dispute_holds_funds() {
         let mut processor = TransactionProcessor::new();
-        processor.process(&deposit(1, 1, "100.25")).unwrap();
-        let account = &processor.accounts[&1];
-        assert_eq!(account.available, Amount(1_002_500));
-        assert_eq!(account.held, Amount::ZERO);
-        assert_eq!(account.total(), Amount(1_002_500));
-    }
-
-    #[test]
-    fn sufficient_withdrawal_debits() {
-        let mut processor = TransactionProcessor::new();
-        processor.process(&deposit(1, 1, "100.25")).unwrap();
-        processor.process(&withdrawal(1, 2, "25.00")).unwrap();
-        let account = &processor.accounts[&1];
-        assert_eq!(account.available, Amount(752_500));
-        assert_eq!(account.total(), Amount(752_500));
-    }
-
-    #[test]
-    fn insufficient_withdrawal_is_skipped_unchanged() {
-        let mut processor = TransactionProcessor::new();
-        processor.process(&deposit(1, 1, "50.00")).unwrap();
-        assert!(processor.process(&withdrawal(1, 2, "75.00")).is_err());
-        let account = &processor.accounts[&1];
-        assert_eq!(account.available, Amount(500_000));
-        assert_eq!(account.total(), Amount(500_000));
-        assert!(!processor.entries.contains_key(&2));
-    }
-
-    #[test]
-    fn dispute_holds_funds_and_keeps_total() {
-        let mut processor = TransactionProcessor::new();
-        processor.process(&deposit(1, 1, "100.25")).unwrap();
-        processor.process(&dispute(1, 1)).unwrap();
-        let account = &processor.accounts[&1];
+        deposit(&mut processor, 1, 1, "10.0");
+        processor
+            .process(&transaction(TransactionType::Dispute, 1, 1, None))
+            .expect("dispute succeeds");
+        let account = account(&processor, 1);
         assert_eq!(account.available, Amount::ZERO);
-        assert_eq!(account.held, Amount(1_002_500));
-        assert_eq!(account.total(), Amount(1_002_500));
+        assert_eq!(account.held, amount("10.0").unwrap());
+        assert_eq!(account.total(), amount("10.0").unwrap());
+    }
+
+    #[test]
+    fn dispute_may_overdraw_available() {
+        let mut processor = TransactionProcessor::new();
+        deposit(&mut processor, 1, 1, "100.0");
+        processor
+            .process(&transaction(
+                TransactionType::Withdrawal,
+                1,
+                2,
+                Some("80.0"),
+            ))
+            .expect("withdrawal succeeds");
+        processor
+            .process(&transaction(TransactionType::Dispute, 1, 1, None))
+            .expect("dispute succeeds");
+        let account = account(&processor, 1);
+        assert_eq!(account.available.to_string(), "-80.0");
+        assert_eq!(account.held, amount("100.0").unwrap());
+        assert_eq!(account.total(), amount("20.0").unwrap());
+    }
+
+    #[test]
+    fn dispute_of_unknown_transaction_is_rejected() {
+        let mut processor = TransactionProcessor::new();
         assert!(matches!(
-            processor.entries.get(&1),
-            Some(TransactionEntry::Disputed { .. })
+            processor.process(&transaction(TransactionType::Dispute, 1, 99, None)),
+            Err(ProcessingError::UnknownTransaction(99))
         ));
-        assert!(!matches!(
-            processor.entries.get(&1),
-            Some(TransactionEntry::Settled { .. })
+        assert_eq!(account(&processor, 1).available, Amount::ZERO);
+    }
+
+    #[test]
+    fn duplicate_dispute_is_rejected() {
+        let mut processor = TransactionProcessor::new();
+        deposit(&mut processor, 1, 1, "10.0");
+        processor
+            .process(&transaction(TransactionType::Dispute, 1, 1, None))
+            .expect("first dispute succeeds");
+        assert!(matches!(
+            processor.process(&transaction(TransactionType::Dispute, 1, 1, None)),
+            Err(ProcessingError::AlreadyDisputed(1))
         ));
-    }
-
-    #[test]
-    fn dispute_can_drive_available_negative() {
-        let mut processor = TransactionProcessor::new();
-        processor.process(&deposit(1, 1, "100.00")).unwrap();
-        processor.process(&withdrawal(1, 2, "80.00")).unwrap();
-        processor.process(&dispute(1, 1)).unwrap();
-
-        let account = &processor.accounts[&1];
-        assert_eq!(account.available, Amount(-800_000));
-        assert_eq!(account.held, Amount(1_000_000));
-        assert_eq!(account.total(), Amount(200_000));
-    }
-
-    #[test]
-    fn dispute_of_unknown_transaction_is_skipped() {
-        let mut processor = TransactionProcessor::new();
-        assert!(processor.process(&dispute(1, 99)).is_err());
-    }
-
-    #[test]
-    fn dispute_of_already_disputed_transaction_is_skipped() {
-        let mut processor = TransactionProcessor::new();
-        processor.process(&deposit(1, 1, "100.25")).unwrap();
-        processor.process(&dispute(1, 1)).unwrap();
-        assert!(processor.process(&dispute(1, 1)).is_err());
+        assert_eq!(account(&processor, 1).held, amount("10.0").unwrap());
     }
 
     #[test]
     fn resolve_releases_held_funds() {
         let mut processor = TransactionProcessor::new();
-        processor.process(&deposit(1, 1, "100.25")).unwrap();
-        processor.process(&dispute(1, 1)).unwrap();
-        processor.process(&resolve(1, 1)).unwrap();
-        let account = &processor.accounts[&1];
+        deposit(&mut processor, 1, 1, "10.0");
+        processor
+            .process(&transaction(TransactionType::Dispute, 1, 1, None))
+            .unwrap();
+        processor
+            .process(&transaction(TransactionType::Resolve, 1, 1, None))
+            .unwrap();
+        let account = account(&processor, 1);
+        assert_eq!(account.available, amount("10.0").unwrap());
         assert_eq!(account.held, Amount::ZERO);
-        assert_eq!(account.available, Amount(1_002_500));
-        assert_eq!(account.total(), Amount(1_002_500));
+    }
+
+    #[test]
+    fn resolving_a_settled_transaction_is_rejected() {
+        let mut processor = TransactionProcessor::new();
+        deposit(&mut processor, 1, 1, "10.0");
         assert!(matches!(
-            processor.entries.get(&1),
-            Some(TransactionEntry::Settled { .. })
-        ));
-        assert!(!matches!(
-            processor.entries.get(&1),
-            Some(TransactionEntry::Disputed { .. })
+            processor.process(&transaction(TransactionType::Resolve, 1, 1, None)),
+            Err(ProcessingError::NotDisputed(1))
         ));
     }
 
     #[test]
-    fn resolve_of_non_disputed_transaction_is_skipped() {
+    fn resolved_transaction_may_be_disputed_again() {
         let mut processor = TransactionProcessor::new();
-        processor.process(&deposit(1, 1, "100.25")).unwrap();
-        assert!(processor.process(&resolve(1, 1)).is_err());
+        deposit(&mut processor, 1, 1, "10.0");
+        processor
+            .process(&transaction(TransactionType::Dispute, 1, 1, None))
+            .unwrap();
+        processor
+            .process(&transaction(TransactionType::Resolve, 1, 1, None))
+            .unwrap();
+        processor
+            .process(&transaction(TransactionType::Dispute, 1, 1, None))
+            .unwrap();
+        assert_eq!(account(&processor, 1).held, amount("10.0").unwrap());
     }
 
     #[test]
-    fn chargeback_withdraws_held_and_locks_account() {
+    fn chargeback_removes_held_funds_and_locks() {
         let mut processor = TransactionProcessor::new();
-        processor.process(&deposit(1, 1, "100.25")).unwrap();
-        processor.process(&dispute(1, 1)).unwrap();
-        processor.process(&chargeback(1, 1)).unwrap();
-        let account = &processor.accounts[&1];
-        assert_eq!(account.held, Amount::ZERO);
+        deposit(&mut processor, 1, 1, "10.0");
+        processor
+            .process(&transaction(TransactionType::Dispute, 1, 1, None))
+            .unwrap();
+        processor
+            .process(&transaction(TransactionType::Chargeback, 1, 1, None))
+            .unwrap();
+        let account = account(&processor, 1);
         assert_eq!(account.available, Amount::ZERO);
+        assert_eq!(account.held, Amount::ZERO);
         assert_eq!(account.total(), Amount::ZERO);
         assert!(account.locked);
-        assert!(!processor.entries.contains_key(&1));
     }
 
     #[test]
-    fn chargeback_of_non_disputed_transaction_is_skipped() {
+    fn chargeback_of_settled_transaction_is_rejected() {
         let mut processor = TransactionProcessor::new();
-        processor.process(&deposit(1, 1, "100.25")).unwrap();
-        assert!(processor.process(&chargeback(1, 1)).is_err());
-        assert!(!processor.accounts[&1].locked);
+        deposit(&mut processor, 1, 1, "10.0");
+        assert!(matches!(
+            processor.process(&transaction(TransactionType::Chargeback, 1, 1, None)),
+            Err(ProcessingError::NotDisputed(1))
+        ));
+        assert!(!account(&processor, 1).locked);
     }
 
     #[test]
-    fn locked_account_rejects_all_operations() {
+    fn locked_account_rejects_later_operations() {
         let mut processor = TransactionProcessor::new();
-        processor.process(&deposit(1, 1, "100.25")).unwrap();
-        processor.process(&dispute(1, 1)).unwrap();
-        processor.process(&chargeback(1, 1)).unwrap();
-        assert!(processor.accounts[&1].locked);
-        assert!(processor.process(&deposit(1, 2, "50.00")).is_err());
-        assert!(processor.process(&withdrawal(1, 3, "1.00")).is_err());
-        let account = &processor.accounts[&1];
+        deposit(&mut processor, 1, 1, "10.0");
+        processor
+            .process(&transaction(TransactionType::Dispute, 1, 1, None))
+            .unwrap();
+        processor
+            .process(&transaction(TransactionType::Chargeback, 1, 1, None))
+            .unwrap();
+        assert!(matches!(
+            processor.process(&transaction(TransactionType::Deposit, 1, 2, Some("5.0"))),
+            Err(ProcessingError::AccountLocked)
+        ));
+        assert_eq!(account(&processor, 1).available, Amount::ZERO);
+    }
+
+    #[test]
+    fn duplicate_transaction_identifier_is_rejected() {
+        let mut processor = TransactionProcessor::new();
+        deposit(&mut processor, 1, 1, "10.0");
+        assert!(matches!(
+            processor.process(&transaction(TransactionType::Deposit, 1, 1, Some("5.0"))),
+            Err(ProcessingError::DuplicateTransaction(1))
+        ));
+        assert_eq!(account(&processor, 1).available, amount("10.0").unwrap());
+    }
+
+    #[test]
+    fn foreign_transaction_reference_is_rejected() {
+        let mut processor = TransactionProcessor::new();
+        deposit(&mut processor, 1, 1, "10.0");
+        assert!(matches!(
+            processor.process(&transaction(TransactionType::Dispute, 2, 1, None)),
+            Err(ProcessingError::NotOwner(1))
+        ));
+        assert_eq!(account(&processor, 1).available, amount("10.0").unwrap());
+        assert_eq!(account(&processor, 2).held, Amount::ZERO);
+    }
+
+    #[test]
+    fn rejected_row_still_initializes_the_client() {
+        let mut processor = TransactionProcessor::new();
+        assert!(matches!(
+            processor.process(&transaction(TransactionType::Withdrawal, 1, 1, Some("5.0"))),
+            Err(ProcessingError::InsufficientFunds)
+        ));
+        assert_eq!(account(&processor, 1), Account::default());
+    }
+
+    #[test]
+    fn missing_amount_leaves_the_transaction_id_available() {
+        let mut processor = TransactionProcessor::new();
+
+        assert!(matches!(
+            processor.process(&transaction(TransactionType::Deposit, 7, 42, None)),
+            Err(ProcessingError::MissingAmount)
+        ));
+        assert_eq!(account(&processor, 7), Account::default());
+
+        deposit(&mut processor, 7, 42, "3.0");
+        assert_eq!(account(&processor, 7).available, amount("3.0").unwrap());
+    }
+
+    #[test]
+    fn rejected_duplicate_does_not_replace_the_original_entry() {
+        let mut processor = TransactionProcessor::new();
+        deposit(&mut processor, 3, 900, "10.0");
+
+        assert!(matches!(
+            processor.process(&transaction(TransactionType::Deposit, 3, 900, Some("5.0"))),
+            Err(ProcessingError::DuplicateTransaction(900))
+        ));
+
+        processor
+            .process(&transaction(TransactionType::Dispute, 3, 900, None))
+            .expect("dispute succeeds");
+        assert_eq!(account(&processor, 3).held, amount("10.0").unwrap());
+    }
+
+    #[test]
+    fn take_accounts_moves_the_map_out() {
+        let mut processor = TransactionProcessor::new();
+        deposit(&mut processor, 9, 1, "4.0");
+
+        let accounts = processor.take_accounts();
+
+        assert_eq!(accounts[&9].available, amount("4.0").unwrap());
+        assert!(processor.accounts().is_empty());
+    }
+
+    #[test]
+    fn locked_account_rejects_missing_amount_before_it_is_validated() {
+        let mut processor = TransactionProcessor::new();
+        deposit(&mut processor, 5, 100, "10.0");
+        processor
+            .process(&transaction(TransactionType::Dispute, 5, 100, None))
+            .expect("dispute succeeds");
+        processor
+            .process(&transaction(TransactionType::Chargeback, 5, 100, None))
+            .expect("chargeback succeeds");
+
+        assert!(matches!(
+            processor.process(&transaction(TransactionType::Withdrawal, 5, 101, None)),
+            Err(ProcessingError::AccountLocked)
+        ));
+
+        let account = account(&processor, 5);
+        assert!(account.locked);
         assert_eq!(account.total(), Amount::ZERO);
-    }
-
-    #[test]
-    fn cross_client_dispute_is_skipped() {
-        let mut processor = TransactionProcessor::new();
-        processor.process(&deposit(1, 1, "100.25")).unwrap();
-        assert!(processor.process(&dispute(2, 1)).is_err());
-        let account = &processor.accounts[&1];
-        assert_eq!(account.available, Amount(1_002_500));
-        assert_eq!(account.held, Amount::ZERO);
-    }
-
-    #[test]
-    fn unknown_client_is_initialized_zeroed() {
-        let mut processor = TransactionProcessor::new();
-        assert!(processor.process(&withdrawal(7, 1, "10.00")).is_err());
-        assert!(processor.accounts.contains_key(&7));
-        assert_eq!(processor.accounts[&7].total(), Amount::ZERO);
     }
 }
