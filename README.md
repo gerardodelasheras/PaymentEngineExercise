@@ -377,5 +377,6 @@ This implementation was developed with AI assistance using:
 - **opencode** — agentic coding environment
 - **DeepSeek** — language model used for implementation and review
 - **Minimax** — language model used for implementation and review
-- **intent-driven-development** — change planning and execution workflow
-- **rust-skills** — Rust coding guidelines and review rules
+- **intent-driven-development** — Change planning and execution workflow - https://github.com/intent-driven-dev/intent-driven-template
+- **rust-skills** — Rust coding guidelines and review rules — https://github.com/leonardomso/rust-skills
+
